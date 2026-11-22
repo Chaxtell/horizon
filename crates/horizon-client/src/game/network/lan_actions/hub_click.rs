@@ -70,9 +70,10 @@ impl Game<'_> {
     }
 }
 
-/// The stacks a click took out of a menu's own slots (`Slot.onTake`): each slot whose stack
-/// shrank, emptied or became another item, with what left it and what stayed. Slots that only
-/// grew or kept their stack are not takes.
+/// The stacks a click took out of a menu's own slots (`Slot.onTake`): each slot that emptied,
+/// became another item, or shrank with its components unchanged, with what left it and what
+/// stayed. A stack that keeps its item and changes its components in place (a bundle filled or
+/// emptied in its slot) is not a take, nor is a slot that only grew or kept its stack.
 fn slot_takes(
     before: &[Option<ItemStack>],
     after: &[Option<ItemStack>],
@@ -81,8 +82,8 @@ fn slot_takes(
     for (slot, (was, now)) in before.iter().zip(after).enumerate() {
         let Some(was) = was else { continue };
         let taken = match now {
-            Some(now) if now.same_item_same_components(was) => {
-                if now.count >= was.count {
+            Some(now) if now.item == was.item => {
+                if now.count >= was.count || !now.same_item_same_components(was) {
                     continue;
                 }
                 let mut taken = was.clone();
@@ -112,5 +113,15 @@ mod tests {
             .map(|(slot, taken, left)| (*slot, taken.count, left.as_ref().map(|l| l.count)))
             .collect();
         assert_eq!(told, [(0, 6, Some(4)), (1, 10, None), (2, 10, Some(1))]);
+    }
+
+    #[test]
+    fn a_bundle_filled_in_its_slot_is_not_a_take() {
+        let empty = ItemStack::new("minecraft:bundle", 1);
+        let mut filled = empty.clone();
+        filled.data_mut().bundle_contents = vec![ItemStack::new("minecraft:stone", 3)];
+        let (before, after) = ([Some(empty.clone())], [Some(filled.clone())]);
+        assert!(slot_takes(&before, &after).is_empty());
+        assert!(slot_takes(&after, &before).is_empty());
     }
 }
