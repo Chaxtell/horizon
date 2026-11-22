@@ -58,6 +58,8 @@ pub fn installed(patched: &[(&str, &[&str], bool)]) {
     if !refusals.is_empty() {
         std::process::exit(game::exit_code::ERROR);
     }
+    let targets: Vec<&str> = patched.iter().map(|(target, _, _)| *target).collect();
+    mod_api::__private::note_patched(&targets);
 }
 
 fn installation_refusals(patched: &[(&str, &[&str], bool)]) -> Vec<String> {

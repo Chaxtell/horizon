@@ -188,17 +188,47 @@ pub(crate) fn mods() -> &'static [ModEntry] {
     installed().map_or(&[], |installed| &installed.mods)
 }
 
+/// The hooks whose native function a native mixin patched, by `HookId`: set once at startup.
+static PATCHED: OnceLock<Box<[bool]>> = OnceLock::new();
+
+/// Which of `hooks` (native function paths, in `HookId` order) a patched copy of `targets` names,
+/// matched on the impl type and function: a mixin row may leave out the hook's area module.
+fn patched_hooks<'a>(hooks: &[&str], targets: impl Iterator<Item = &'a str>) -> Box<[bool]> {
+    fn tail(path: &str) -> String {
+        let path = path.replace(' ', "");
+        let mut parts = path.rsplitn(3, "::");
+        let name = parts.next().unwrap_or_default();
+        format!("{}::{name}", parts.next().unwrap_or_default())
+    }
+    let targets: std::collections::HashSet<String> = targets.map(tail).collect();
+    hooks
+        .iter()
+        .map(|hook| targets.contains(&tail(hook)))
+        .collect()
+}
+
+/// Record the native functions mixins patched, so a hook a mixin injects into counts as listened.
+pub(crate) fn note_patched<'a>(targets: impl Iterator<Item = &'a str>) {
+    let _ = PATCHED.set(patched_hooks(&generated::HOOK_TARGETS, targets));
+}
+
+fn patched(hook: generated::HookId) -> bool {
+    PATCHED.get().is_some_and(|patched| patched[hook as usize])
+}
+
 pub(crate) fn listened(hook: generated::HookId) -> bool {
-    installed().is_some_and(|installed| installed.subscribers.contains_any(hook as usize))
+    patched(hook)
+        || installed().is_some_and(|installed| installed.subscribers.contains_any(hook as usize))
 }
 
 pub(crate) fn enabled_listened(hook: generated::HookId) -> bool {
-    installed().is_some_and(|installed| {
-        installed
-            .subscribers
-            .indices(hook as usize)
-            .any(|index| !installed.disabled[index].load(std::sync::atomic::Ordering::Relaxed))
-    })
+    patched(hook)
+        || installed().is_some_and(|installed| {
+            installed
+                .subscribers
+                .indices(hook as usize)
+                .any(|index| !installed.disabled[index].load(std::sync::atomic::Ordering::Relaxed))
+        })
 }
 
 /// Switch an installed trait mod's subsequent dispatches on or off.
@@ -460,5 +490,22 @@ impl ListenerScope {
             },
         );
         &*entry.hooks
+    }
+}
+
+#[cfg(test)]
+mod patched_tests {
+    #[test]
+    fn a_mixin_on_a_hook_function_marks_only_that_hook() {
+        let hooks = [
+            "horizon_client::game::native_hooks::base::Game<'_>::native_player_chat",
+            "horizon_client::game::native_hooks::shared::Game<'_>::native_living_incoming_damage",
+            "horizon_client::game::native_hooks::level::GameLevel<'_>::native_player_chat",
+        ];
+        let rows = ["horizon_client::game::native_hooks::Game < '_ >::native_player_chat"];
+        assert_eq!(
+            *super::patched_hooks(&hooks, rows.into_iter()),
+            [true, false, false]
+        );
     }
 }

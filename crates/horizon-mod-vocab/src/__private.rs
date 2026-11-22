@@ -79,6 +79,12 @@ pub fn listened(hook: HookId) -> bool {
     crate::listened(hook)
 }
 
+/// Record the native functions the installed mixin copies patched, once at startup, so the
+/// hooks they inject into are dispatched as listened ones are.
+pub fn note_patched(targets: &[&str]) {
+    crate::runtime::note_patched(targets.iter().copied());
+}
+
 /// Whether at least one enabled mod subscribes to `hook`, visiting only its subscribers.
 pub fn enabled_listened(hook: HookId) -> bool {
     crate::runtime::enabled_listened(hook)
