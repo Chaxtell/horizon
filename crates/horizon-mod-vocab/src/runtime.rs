@@ -198,7 +198,10 @@ fn patched_hooks<'a>(hooks: &[&str], targets: impl Iterator<Item = &'a str>) -> 
         let path = path.replace(' ', "");
         let mut parts = path.rsplitn(3, "::");
         let name = parts.next().unwrap_or_default();
-        format!("{}::{name}", parts.next().unwrap_or_default())
+        let ty = parts.next().unwrap_or_default();
+        // `Game<'_>` and `Game` are one type; a `<Type as Trait>` segment keeps its trait apart.
+        let ty = if ty.starts_with('<') { ty } else { ty.split('<').next().unwrap_or_default() };
+        format!("{ty}::{name}")
     }
     let targets: std::collections::HashSet<String> = targets.map(tail).collect();
     hooks
@@ -503,6 +506,11 @@ mod patched_tests {
             "horizon_client::game::native_hooks::level::GameLevel<'_>::native_player_chat",
         ];
         let rows = ["horizon_client::game::native_hooks::Game < '_ >::native_player_chat"];
+        assert_eq!(
+            *super::patched_hooks(&hooks, rows.into_iter()),
+            [true, false, false]
+        );
+        let rows = ["game::Game::native_player_chat"];
         assert_eq!(
             *super::patched_hooks(&hooks, rows.into_iter()),
             [true, false, false]
