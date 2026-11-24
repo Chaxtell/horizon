@@ -188,8 +188,14 @@ pub(crate) fn mods() -> &'static [ModEntry] {
     installed().map_or(&[], |installed| &installed.mods)
 }
 
-/// The hooks whose native function a native mixin patched, by `HookId`: set once at startup.
-static PATCHED: OnceLock<Box<[bool]>> = OnceLock::new();
+/// The hooks whose native function a native mixin patched, by `HookId`: only ever set, never
+/// cleared, so a later or partial report adds to the table instead of replacing it.
+static PATCHED: OnceLock<Box<[std::sync::atomic::AtomicBool]>> = OnceLock::new();
+
+#[cfg(any(test, feature = "testing"))]
+thread_local! {
+    static TEST_PATCHED: std::cell::Cell<Option<&'static [std::sync::atomic::AtomicBool]>> = const { std::cell::Cell::new(None) };
+}
 
 /// Which of `hooks` (native function paths, in `HookId` order) a patched copy of `targets` names,
 /// matched on the impl type and function: a mixin row may leave out the hook's area module.
@@ -211,12 +217,35 @@ fn patched_hooks<'a>(hooks: &[&str], targets: impl Iterator<Item = &'a str>) -> 
 }
 
 /// Record the native functions mixins patched, so a hook a mixin injects into counts as listened.
+/// Each call adds to what earlier calls recorded.
 pub(crate) fn note_patched<'a>(targets: impl Iterator<Item = &'a str>) {
-    let _ = PATCHED.set(patched_hooks(&generated::HOOK_TARGETS, targets));
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let fresh = || (0..generated::HOOK_COUNT).map(|_| AtomicBool::new(false)).collect();
+    #[cfg(any(test, feature = "testing"))]
+    let flags = TEST_PATCHED.get().unwrap_or_else(|| {
+        let flags: &'static [AtomicBool] = Box::leak(fresh());
+        TEST_PATCHED.set(Some(flags));
+        flags
+    });
+    #[cfg(not(any(test, feature = "testing")))]
+    let flags = PATCHED.get_or_init(fresh);
+    for (flag, hit) in flags.iter().zip(patched_hooks(&generated::HOOK_TARGETS, targets)) {
+        if hit {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
-fn patched(hook: generated::HookId) -> bool {
-    PATCHED.get().is_some_and(|patched| patched[hook as usize])
+/// Whether a mixin patched `hook`'s native function. It keeps the hook's gates open even when
+/// the mod that brought the mixin is switched off: the patched copy is installed either way.
+pub(crate) fn patched(hook: generated::HookId) -> bool {
+    #[cfg(any(test, feature = "testing"))]
+    if let Some(flags) = TEST_PATCHED.get() {
+        return flags[hook as usize].load(std::sync::atomic::Ordering::Relaxed);
+    }
+    PATCHED
+        .get()
+        .is_some_and(|flags| flags[hook as usize].load(std::sync::atomic::Ordering::Relaxed))
 }
 
 pub(crate) fn listened(hook: generated::HookId) -> bool {
@@ -515,5 +544,23 @@ mod patched_tests {
             *super::patched_hooks(&hooks, rows.into_iter()),
             [true, false, false]
         );
+    }
+
+    #[test]
+    fn a_patched_hook_is_listened_with_no_subscriber_and_others_are_not() {
+        use crate::generated::{HOOK_TARGETS, HookId};
+        let target = |hook: HookId| HOOK_TARGETS[hook as usize];
+        // No trait mod is installed on this test thread.
+        assert!(!super::listened(HookId::ClientChat));
+        assert!(!crate::__private::has_part_hook(HookId::CraftingRemainder));
+        super::note_patched([target(HookId::ClientChat)].into_iter());
+        // A later report adds to the first instead of replacing it.
+        super::note_patched([target(HookId::CraftingRemainder)].into_iter());
+        assert!(super::listened(HookId::ClientChat));
+        assert!(super::enabled_listened(HookId::ClientChat));
+        assert!(crate::__private::has_part_hook(HookId::CraftingRemainder));
+        assert!(crate::__private::has_scoped_hook(HookId::CraftingRemainder));
+        assert!(!super::listened(HookId::ClientChatReceived));
+        assert!(!crate::__private::has_part_hook(HookId::ClientChatReceived));
     }
 }

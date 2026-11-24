@@ -192,14 +192,15 @@ pub(crate) fn installed() -> Option<&'static Installed> {
     INSTALLED.get()
 }
 
-/// Whether any installed part subscribes to a scoped hook.
+/// Whether any installed part subscribes to a scoped hook, or a mixin patched its native function.
 pub fn has_part_hook(hook: HookId) -> bool {
-    installed().is_some_and(|installed| installed.hook_bits[hook as usize])
+    crate::runtime::patched(hook)
+        || installed().is_some_and(|installed| installed.hook_bits[hook as usize])
 }
 
 /// Preserve the no-mod fast path for level hooks.
 pub fn has_scoped_hook(hook: HookId) -> bool {
-    !crate::mods().is_empty() && has_part_hook(hook)
+    crate::runtime::patched(hook) || (!crate::mods().is_empty() && has_part_hook(hook))
 }
 
 // no wire: process-local registration and dispatch storage contains trait objects and owning-mod identities.

@@ -79,8 +79,9 @@ pub fn listened(hook: HookId) -> bool {
     crate::listened(hook)
 }
 
-/// Record the native functions the installed mixin copies patched, once at startup, so the
-/// hooks they inject into are dispatched as listened ones are.
+/// Record the native functions the installed mixin copies patched, at startup, so the
+/// hooks they inject into are dispatched as listened ones are. Each call adds to the earlier ones.
+#[doc(hidden)]
 pub fn note_patched(targets: &[&str]) {
     crate::runtime::note_patched(targets.iter().copied());
 }
